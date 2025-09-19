@@ -10,7 +10,9 @@ This is **not a game**. The shader is extremely heavy and may cause:
 - Throttling, lag, or even crashes 💀  
 Use at your own risk (**DWYOR**).
 ---
-
+## ‼️☢️ **If You Dare**
+Click the link 👉 https://gustyx-power.github.io/RayBulb-Benchmark/
+---
 ## ✨ Features
 - WebGL2-based **Mandelbulb fractal raymarching**
 - Heavy configuration:  
