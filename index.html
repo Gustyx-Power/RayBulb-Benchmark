@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title> RayBulb Benchmark</title>
+<style>
+  html,body{height:100%;margin:0;background:#000;overflow:hidden;font-family:monospace}
+  canvas{display:block;width:100%;height:100%}
+  #hud{
+    position:fixed;left:10px;top:10px;z-index:9999;
+    background:rgba(0,0,0,0.45);color:#fff;padding:8px 10px;border-radius:8px;
+    font:12px/1.1 monospace;
+  }
+  #warn{display:block;color:#f66;margin-top:6px;font-size:11px}
+  #popup{
+    position:fixed;top:0;left:0;width:100%;height:100%;
+    background:rgba(0,0,0,0.9);color:#fff;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    z-index:10000;text-align:center;padding:20px;
+  }
+  #popup h2{margin:0 0 15px;font-size:20px;color:#f33}
+  #popup button{
+    margin-top:20px;padding:10px 20px;
+    background:#f33;color:#fff;border:none;border-radius:5px;
+    font-size:14px;cursor:pointer;
+  }
+</style>
+</head>
+<body>
+<div id="popup">
+  <h2>⚠️ GPU STRESS TEST</h2>
+  <p>This demo is <b>NOT a game</b>.<br>
+  It is an <b>extremely heavy GPU benchmark</b> that may cause your device to run hot, throttle, or even crash.<br><br>
+  <b>Do at your own risk (DYOR).</b></p>
+  <button id="startBtn">I Understand, Start Benchmark</button>
+</div>
+
+<canvas id="c" style="display:none"></canvas>
+<div id="hud" style="display:none">FPS: <span id="fps">0</span>
+  <span id="warn">RayBulb Benchmark — ITER=50, STEPS=1900, 3×3=SS, POWER=9.0, Your Device will MELT 🔥</span>
+</div>
+
+<script>
+document.getElementById("startBtn").addEventListener("click",()=>{
+  document.getElementById("popup").style.display="none";
+  document.getElementById("c").style.display="block";
+  document.getElementById("hud").style.display="block";
+  startBenchmark(); 
+});
+
+function startBenchmark(){
+  const canvas = document.getElementById('c');
+  const gl = canvas.getContext('webgl2', { powerPreference: 'high-performance', antialias:false });
+  if(!gl) return alert('WebGL2 required / not supported');
+
+  function resize(){
+    canvas.width = Math.max(1, Math.floor(innerWidth * devicePixelRatio));
+    canvas.height = Math.max(1, Math.floor(innerHeight * devicePixelRatio));
+    gl.viewport(0,0,canvas.width,canvas.height);
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  const vs = `#version 300 es
+  in vec2 a;
+  void main(){ gl_Position = vec4(a,0.0,1.0); }`;
+
+  const fs = `#version 300 es
+  precision highp float;
+  out vec4 o;
+  uniform vec2 uRes;
+  uniform float uTime;
+
+  const int ITER = 50;
+  const int MAX_STEPS = 1900;
+  const float POWER = 9.0;
+
+  float mandelbulbDE(vec3 p){
+    vec3 z = p;
+    float dr = 1.0;
+    float r = 0.0;
+    for(int i=0;i<ITER;i++){
+      r = length(z);
+      r = max(r, 1e-6);
+      float theta = acos(clamp(z.z / r, -1.0, 1.0));
+      float phi = atan(z.y, z.x);
+      float zr = pow(r, POWER);
+      dr = pow(r, POWER - 1.0) * POWER * dr + 1.0;
+      theta *= POWER;
+      phi *= POWER;
+      z = zr * vec3(sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta)) + p;
+      z = clamp(z, -1e6, 1e6);
+    }
+    r = max(r, 1e-6);
+    return 0.5 * log(r) * r / dr;
+  }
+
+  float mapDE(vec3 p){ return mandelbulbDE(p); }
+
+  vec3 getNormal(vec3 p){
+    float e = 0.0009;
+    float dx = mapDE(p + vec3(e,0,0)) - mapDE(p - vec3(e,0,0));
+    float dy = mapDE(p + vec3(0,e,0)) - mapDE(p - vec3(0,e,0));
+    float dz = mapDE(p + vec3(0,0,e)) - mapDE(p - vec3(0,0,e));
+    return normalize(vec3(dx, dy, dz));
+  }
+
+  vec3 palette(float v){
+    return 0.5 + 0.5 * cos(6.2831853 * (vec3(0.0,0.33,0.67) + v));
+  }
+
+  vec3 renderRay(vec2 uv){
+    float ang = uTime * 0.12;
+    float yaw = ang;
+    float pitch = sin(uTime * 0.07) * 0.2;
+    float radius = 3.8 + sin(uTime*0.05)*0.2;
+
+    vec3 ro = vec3(radius * cos(pitch) * sin(yaw),
+                   radius * sin(pitch),
+                   radius * cos(pitch) * cos(yaw));
+    vec3 ta = vec3(0.0);
+    vec3 forward = normalize(ta - ro);
+    vec3 right = normalize(cross(vec3(0.0,1.0,0.0), forward));
+    vec3 up = cross(forward, right);
+
+    vec3 rd = normalize(uv.x * right + uv.y * up + 1.5 * forward);
+
+    float tDist = 0.0;
+    vec3 p = ro;
+    for(int i=0;i<MAX_STEPS;i++){
+      p = ro + rd * tDist;
+      float d = mapDE(p);
+      d = max(d, 1e-6);
+      tDist += d;
+      if(d < 0.0009) break;
+      if(tDist > 80.0) break;
+    }
+
+    vec3 n = getNormal(p);
+    float diff = max(dot(n, normalize(vec3(1.0, 0.8, 0.6))), 0.0);
+    vec3 base = palette(length(p) * 0.12 + uTime * 0.06);
+    float fog = exp(-0.035 * tDist);
+    vec3 col = mix(vec3(0.02,0.02,0.03), base * diff, fog);
+    float rim = pow(1.0 - max(dot(n, rd), 0.0), 3.0);
+    col += 0.18 * rim * palette(uTime * 0.08 + length(p)*0.01);
+    return clamp(col, 0.0, 1.0);
+  }
+
+  void main(){
+    vec2 frag = gl_FragCoord.xy;
+    vec2 res = uRes;
+    vec2 uv = (frag - 0.5 * res) / res.y;
+
+    // 3x3 supersampling
+    vec3 col = vec3(0.0);
+    int idx = 0;
+    for(int x=-1;x<=1;x++){
+      for(int y=-1;y<=1;y++){
+        vec2 offset = vec2(float(x), float(y)) * (0.35 / res.y);
+        col += renderRay(uv + offset);
+        idx++;
+      }
+    }
+    col /= float(idx);
+
+    col = pow(col, vec3(0.95));
+    o = vec4(col, 1.0);
+  }`;
+
+  function compile(type, src){
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+      const msg = gl.getShaderInfoLog(s);
+      alert('Shader compile error:\\n' + msg);
+      throw new Error(msg);
+    }
+    return s;
+  }
+
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){
+    const msg = gl.getProgramInfoLog(prog);
+    alert('Program link error:\\n' + msg);
+    throw new Error(msg);
+  }
+  gl.useProgram(prog);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const aLoc = gl.getAttribLocation(prog, 'a');
+  gl.enableVertexAttribArray(aLoc);
+  gl.vertexAttribPointer(aLoc, 2, gl.FLOAT, false, 0, 0);
+
+  const uRes = gl.getUniformLocation(prog, 'uRes');
+  const uTime = gl.getUniformLocation(prog, 'uTime');
+
+  let frames = 0, last = performance.now();
+  function updateFPS(){
+    frames++;
+    const now = performance.now();
+    if(now - last >= 1000){
+      document.getElementById('fps').textContent = frames;
+      frames = 0; last = now;
+    }
+  }
+
+  function draw(){
+    if(canvas.width !== Math.max(1, Math.floor(innerWidth * devicePixelRatio)) ||
+       canvas.height !== Math.max(1, Math.floor(innerHeight * devicePixelRatio))){
+      resize();
+    }
+    gl.useProgram(prog);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTime, performance.now() * 0.001);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    updateFPS();
+    requestAnimationFrame(draw);
+  }
+
+  requestAnimationFrame(draw);
+}
+</script>
+</body>
+</html>
